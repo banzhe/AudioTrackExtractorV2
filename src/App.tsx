@@ -1,49 +1,68 @@
-import { createSignal } from "solid-js";
-import logo from "./assets/logo.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { createSignal, onCleanup, onMount } from "solid-js";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isVideoFile } from "./utils/videoValidation";
+import DragDropZone from "./components/DragDropZone";
+import VideoList from "./components/VideoList";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = createSignal("");
-  const [name, setName] = createSignal("");
+  const [videoFiles, setVideoFiles] = createSignal<string[]>([]);
+  const [isDragging, setIsDragging] = createSignal(false);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name: name() }));
-  }
+  // 监听文件拖放事件
+  onMount(async () => {
+    const appWindow = getCurrentWindow();
+
+    // 在 Tauri 2.0 中，使用 onDragDropEvent 方法监听文件拖放事件
+    const unlisten = await appWindow.onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter") {
+        // 文件进入窗口区域
+        setIsDragging(true);
+        console.log("文件进入窗口:", payload.paths);
+      } else if (payload.type === "over") {
+        // 文件在窗口上方悬停（持续触发）
+        setIsDragging(true);
+      } else if (payload.type === "drop") {
+        // 文件被拖放到窗口
+        setIsDragging(false);
+        const droppedFiles = payload.paths || [];
+        const videoFilePaths = droppedFiles.filter(isVideoFile);
+
+        if (videoFilePaths.length > 0) {
+          setVideoFiles(videoFilePaths);
+          console.log("拖入的视频文件:", videoFilePaths);
+        } else {
+          console.log("未检测到视频文件");
+        }
+      } else if (payload.type === "leave") {
+        // 文件离开窗口区域
+        setIsDragging(false);
+      }
+    });
+
+    // 清理函数：组件卸载时取消监听
+    onCleanup(() => {
+      unlisten();
+    });
+  });
+
+  const handleClearFiles = () => {
+    setVideoFiles([]);
+  };
 
   return (
     <main class="container">
-      <h1>Welcome to Tauri + Solid</h1>
-
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://solidjs.com" target="_blank">
-          <img src={logo} class="logo solid" alt="Solid logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and Solid logos to learn more.</p>
-
-      <form
-        class="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg()}</p>
+      {videoFiles().length === 0
+        ? (
+          <div class="w-full max-w-2xl mx-auto px-4">
+            <DragDropZone isDragging={isDragging()} />
+          </div>
+        )
+        : (
+          <div class="mt-8">
+            <VideoList files={videoFiles()} onClear={handleClearFiles} />
+          </div>
+        )}
     </main>
   );
 }
