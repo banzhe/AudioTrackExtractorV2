@@ -15,7 +15,8 @@
     "@ameinhardt/unocss-preset-daisy": "^1.1.8",
     "solid-js": "^1.9.3",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-dialog": "^2"
   },
   "devDependencies": {
     "daisyui": "5.1.12",

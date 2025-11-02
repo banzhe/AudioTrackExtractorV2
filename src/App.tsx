@@ -51,19 +51,22 @@ function App() {
   };
 
   return (
-    <main class="container">
-      {videoFiles().length === 0
-        ? (
-          <div class="w-full max-w-2xl mx-auto px-4">
-            <DragDropZone isDragging={isDragging()} />
-          </div>
-        )
-        : (
-          <div class="mt-8">
-            <VideoList files={videoFiles()} onClear={handleClearFiles} />
-          </div>
-        )}
-    </main>
+    <div class="min-h-screen bg-base-100">
+      {/* 主内容区 */}
+      <main class="container mx-auto px-4 py-8">
+        {videoFiles().length === 0
+          ? (
+            <div class="w-full h-full flex items-center justify-center">
+              <DragDropZone isDragging={isDragging()} />
+            </div>
+          )
+          : (
+            <div>
+              <VideoList files={videoFiles()} onClear={handleClearFiles} />
+            </div>
+          )}
+      </main>
+    </div>
   );
 }
 
