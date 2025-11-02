@@ -39,6 +39,7 @@ export async function getAudioTracks(
  * @param transcode 是否转码为 MP3（false 则直接复制音频流）
  * @param trackIndex 指定要提取的音轨索引（可选）
  * @param trackCodec 音轨编码格式（可选，用于直接提取模式）
+ * @param splitByChapters 是否按章节切割音频（可选）
  * @returns 成功返回输出文件路径，失败抛出错误
  */
 export async function extractAudio(
@@ -47,6 +48,7 @@ export async function extractAudio(
   transcode: boolean = true,
   trackIndex?: number,
   trackCodec?: string,
+  splitByChapters: boolean = false,
 ): Promise<string> {
   try {
     const result = await invoke<string>("extract_audio", {
@@ -55,6 +57,7 @@ export async function extractAudio(
       transcode,
       trackIndex,
       trackCodec,
+      splitByChapters,
     });
     return result;
   } catch (error) {

@@ -22,6 +22,7 @@ const VideoList: Component<VideoListProps> = (props) => {
   const [isProcessing, setIsProcessing] = createSignal(false);
   const [processingStatus, setProcessingStatus] = createSignal("");
   const [shouldTranscode, setShouldTranscode] = createSignal(true);
+  const [splitByChapters, setSplitByChapters] = createSignal(false);
   const [videosWithTracks, setVideosWithTracks] = createSignal<VideoWithTracks[]>([]);
 
   const getFileName = (filePath: string) => {
@@ -148,6 +149,7 @@ const VideoList: Component<VideoListProps> = (props) => {
               shouldTranscode(),
               trackIndex,
               track.codec,
+              splitByChapters(),
             );
             successCount++;
           } catch (error) {
@@ -329,9 +331,9 @@ const VideoList: Component<VideoListProps> = (props) => {
 
           <div class="divider"></div>
 
-          {/* 转码选项 */}
+          {/* 处理选项 */}
           <div class="card bg-base-200 border border-base-300 mb-4">
-            <div class="card-body p-4">
+            <div class="card-body p-4 space-y-3">
               <label class="label cursor-pointer justify-start gap-3">
                 <input
                   type="checkbox"
@@ -352,6 +354,33 @@ const VideoList: Component<VideoListProps> = (props) => {
                       {shouldTranscode()
                         ? "将音频转换为 MP3 格式（兼容性好，文件较大）"
                         : "直接提取原始音频流（速度快，保持原始格式和质量）"}
+                    </span>
+                  </div>
+                </span>
+              </label>
+
+              <div class="divider my-0"></div>
+
+              <label class="label cursor-pointer justify-start gap-3">
+                <input
+                  type="checkbox"
+                  class="checkbox checkbox-primary"
+                  checked={splitByChapters()}
+                  onChange={(e) => setSplitByChapters(e.currentTarget.checked)}
+                  disabled={isProcessing()}
+                />
+                <span class="label-text">
+                  <div class="flex flex-col">
+                    <div class="flex items-center gap-2">
+                      <span class="font-medium text-sm">按章节切割</span>
+                      <div class={`badge badge-xs ${splitByChapters() ? "badge-success" : "badge-outline"}`}>
+                        {splitByChapters() ? "已启用" : "已禁用"}
+                      </div>
+                    </div>
+                    <span class="text-xs text-base-content/60 mt-1">
+                      {splitByChapters()
+                        ? "根据视频章节信息将音频切割为多个独立文件"
+                        : "提取完整音频到单个文件"}
                     </span>
                   </div>
                 </span>

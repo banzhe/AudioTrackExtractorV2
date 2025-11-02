@@ -27,6 +27,19 @@ pub struct AudioTrack {
     title: Option<String>,
 }
 
+/// 章节信息
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Chapter {
+    /// 章节索引
+    index: usize,
+    /// 开始时间（秒）
+    start_time: f64,
+    /// 结束时间（秒）
+    end_time: f64,
+    /// 章节标题
+    title: Option<String>,
+}
+
 /// 使用 ffprobe 检测视频的音频编码格式
 fn detect_audio_codec(video_path: &str) -> Result<String, String> {
     let output = Command::new("ffprobe")
@@ -68,6 +81,61 @@ fn get_extension_for_codec(codec: &str) -> &str {
         "pcm_s16le" | "pcm_s24le" | "pcm_s32le" => "wav",
         _ => "mka",  // 未知格式使用 MKA 作为通用容器
     }
+}
+
+/// 获取视频的章节信息
+#[tauri::command]
+fn get_chapters(video_path: String) -> Result<Vec<Chapter>, String> {
+    // 验证视频文件是否存在
+    if !Path::new(&video_path).exists() {
+        return Err(format!("视频文件不存在: {}", video_path));
+    }
+
+    // 使用 ffprobe 获取章节信息
+    let output = Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("chapter=id,start_time,end_time:chapter_tags=title")
+        .arg("-of")
+        .arg("json")
+        .arg(&video_path)
+        .output()
+        .map_err(|e| format!("无法执行 ffprobe: {}", e))?;
+
+    if !output.status.success() {
+        return Err("无法获取章节信息".to_string());
+    }
+
+    // 解析 JSON 输出
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("解析 JSON 失败: {}", e))?;
+
+    let mut chapters = Vec::new();
+
+    if let Some(chapter_array) = json["chapters"].as_array() {
+        for (idx, chapter) in chapter_array.iter().enumerate() {
+            let start_time = chapter["start_time"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let end_time = chapter["end_time"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let title = chapter["tags"]["title"].as_str().map(|t| t.to_string());
+
+            chapters.push(Chapter {
+                index: idx,
+                start_time,
+                end_time,
+                title,
+            });
+        }
+    }
+
+    Ok(chapters)
 }
 
 /// 获取视频的所有音频轨道信息
@@ -134,6 +202,7 @@ fn extract_audio(
     transcode: bool,
     track_index: Option<usize>,
     track_codec: Option<String>,
+    split_by_chapters: bool,
 ) -> Result<String, String> {
     // 验证视频文件是否存在
     if !Path::new(&video_path).exists() {
@@ -151,82 +220,167 @@ fn extract_audio(
         .and_then(|name| name.to_str())
         .ok_or_else(|| "无法解析视频文件名".to_string())?;
 
-    // 根据是否转码决定输出文件扩展名
-    let output_file = if transcode {
-        // 转码为 MP3
-        let suffix = if let Some(idx) = track_index {
-            format!("_track{}.mp3", idx)
+    // 如果需要按章节切割
+    if split_by_chapters {
+        let chapters = get_chapters(video_path.clone())?;
+
+        if chapters.is_empty() {
+            return Err("视频不包含章节信息".to_string());
+        }
+
+        // 确定文件扩展名
+        let extension = if transcode {
+            "mp3".to_string()
         } else {
-            ".mp3".to_string()
-        };
-        Path::new(&output_dir).join(format!("{}{}", video_file_name, suffix))
-    } else {
-        // 使用提供的编码格式或检测原始音频编码格式
-        let codec = if let Some(c) = track_codec {
-            c
-        } else {
-            detect_audio_codec(&video_path)?
-        };
-        let extension = get_extension_for_codec(&codec);
-
-        let suffix = if let Some(idx) = track_index {
-            format!("_track{}.{}", idx, extension)
-        } else {
-            format!(".{}", extension)
-        };
-        Path::new(&output_dir).join(format!("{}{}", video_file_name, suffix))
-    };
-
-    let output_path = output_file
-        .to_str()
-        .ok_or_else(|| "无法构建输出路径".to_string())?;
-
-    // 调用 ffmpeg 提取音频
-    let mut command = Command::new("ffmpeg");
-    command
-        .arg("-i")
-        .arg(&video_path);
-
-    // 如果指定了轨道索引，使用 -map 选择特定音轨
-    if let Some(idx) = track_index {
-        command
-            .arg("-map")
-            .arg(format!("0:a:{}", idx));
-    } else {
-        command.arg("-vn");  // 不包含视频流
-    }
-
-    if transcode {
-        // 转码为 MP3
-        command
-            .arg("-acodec")
-            .arg("libmp3lame")  // 使用 MP3 编码
-            .arg("-q:a")
-            .arg("2");  // 音质设置（0-9，2为高质量）
-    } else {
-        // 直接复制音频流，不重新编码
-        command
-            .arg("-acodec")
-            .arg("copy");
-    }
-
-    command
-        .arg("-y")  // 覆盖已存在的文件
-        .arg(output_path);
-
-    let output = command.output();
-
-    match output {
-        Ok(result) => {
-            if result.status.success() {
-                Ok(output_path.to_string())
+            let codec = if let Some(c) = &track_codec {
+                c.clone()
             } else {
-                let error_msg = String::from_utf8_lossy(&result.stderr);
-                Err(format!("FFmpeg 执行失败: {}", error_msg))
+                detect_audio_codec(&video_path)?
+            };
+            get_extension_for_codec(&codec).to_string()
+        };
+
+        // 对每个章节进行提取
+        for chapter in &chapters {
+            let default_title = format!("Chapter{}", chapter.index + 1);
+            let chapter_title = chapter.title.as_deref().unwrap_or(&default_title);
+
+            let track_suffix = if let Some(idx) = track_index {
+                format!("_track{}", idx)
+            } else {
+                String::new()
+            };
+
+            let output_file = Path::new(&output_dir).join(format!(
+                "{}{}_{:02}_{}.{}",
+                video_file_name,
+                track_suffix,
+                chapter.index + 1,
+                chapter_title,
+                extension
+            ));
+
+            let output_path = output_file
+                .to_str()
+                .ok_or_else(|| "无法构建输出路径".to_string())?;
+
+            // 构建 ffmpeg 命令
+            let mut command = Command::new("ffmpeg");
+            command
+                .arg("-i")
+                .arg(&video_path)
+                .arg("-ss")
+                .arg(chapter.start_time.to_string())
+                .arg("-to")
+                .arg(chapter.end_time.to_string());
+
+            // 如果指定了轨道索引，使用 -map 选择特定音轨
+            if let Some(idx) = track_index {
+                command
+                    .arg("-map")
+                    .arg(format!("0:a:{}", idx));
+            } else {
+                command.arg("-vn");
+            }
+
+            if transcode {
+                command
+                    .arg("-acodec")
+                    .arg("libmp3lame")
+                    .arg("-q:a")
+                    .arg("2");
+            } else {
+                command
+                    .arg("-acodec")
+                    .arg("copy");
+            }
+
+            command
+                .arg("-y")
+                .arg(output_path);
+
+            let output = command.output()
+                .map_err(|e| format!("无法执行 FFmpeg: {}", e))?;
+
+            if !output.status.success() {
+                let error_msg = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("FFmpeg 执行失败（章节 {}）: {}", chapter.index + 1, error_msg));
             }
         }
-        Err(e) => {
-            Err(format!("无法执行 FFmpeg，请确保已安装 FFmpeg: {}", e))
+
+        Ok(format!("成功提取 {} 个章节", chapters.len()))
+    } else {
+        // 原有的完整提取逻辑
+        let output_file = if transcode {
+            let suffix = if let Some(idx) = track_index {
+                format!("_track{}.mp3", idx)
+            } else {
+                ".mp3".to_string()
+            };
+            Path::new(&output_dir).join(format!("{}{}", video_file_name, suffix))
+        } else {
+            let codec = if let Some(c) = track_codec {
+                c
+            } else {
+                detect_audio_codec(&video_path)?
+            };
+            let extension = get_extension_for_codec(&codec);
+
+            let suffix = if let Some(idx) = track_index {
+                format!("_track{}.{}", idx, extension)
+            } else {
+                format!(".{}", extension)
+            };
+            Path::new(&output_dir).join(format!("{}{}", video_file_name, suffix))
+        };
+
+        let output_path = output_file
+            .to_str()
+            .ok_or_else(|| "无法构建输出路径".to_string())?;
+
+        let mut command = Command::new("ffmpeg");
+        command
+            .arg("-i")
+            .arg(&video_path);
+
+        if let Some(idx) = track_index {
+            command
+                .arg("-map")
+                .arg(format!("0:a:{}", idx));
+        } else {
+            command.arg("-vn");
+        }
+
+        if transcode {
+            command
+                .arg("-acodec")
+                .arg("libmp3lame")
+                .arg("-q:a")
+                .arg("2");
+        } else {
+            command
+                .arg("-acodec")
+                .arg("copy");
+        }
+
+        command
+            .arg("-y")
+            .arg(output_path);
+
+        let output = command.output();
+
+        match output {
+            Ok(result) => {
+                if result.status.success() {
+                    Ok(output_path.to_string())
+                } else {
+                    let error_msg = String::from_utf8_lossy(&result.stderr);
+                    Err(format!("FFmpeg 执行失败: {}", error_msg))
+                }
+            }
+            Err(e) => {
+                Err(format!("无法执行 FFmpeg，请确保已安装 FFmpeg: {}", e))
+            }
         }
     }
 }
@@ -236,7 +390,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![greet, get_audio_tracks, extract_audio])
+        .invoke_handler(tauri::generate_handler![greet, get_audio_tracks, get_chapters, extract_audio])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
